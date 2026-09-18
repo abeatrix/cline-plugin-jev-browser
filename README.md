@@ -44,7 +44,7 @@ Playwright timeout to settle after cancellation. Browser mutations are not retri
 
 Results include `status`, `steps`, `elapsedMs`, and a JSONL `tracePath`.
 Statuses are `done_unverified`, `blocked`, `needs_review`, `uncertain`,
-`step_limit`, or `interrupted`. An attempted action in a failed run might already
+`step_limit`, `evaluation_limit`, or `interrupted`. An attempted action in a failed run might already
 have taken effect: inspect before continuing. Traces record decisions (including terminal/rejected decisions), stale observations,
 action attempts, completion and the final result. Provider confidence is recorded
 separately when supplied. They omit generated field

@@ -318,7 +318,7 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 				try {
 					const target = snapshot.data.targets.find(
 						(e) => e.label === "Search",
-					 );
+					);
 					assert.ok(target);
 					await page
 						.locator("button")
@@ -330,10 +330,46 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 							undefined,
 							new AbortController().signal,
 						),
-						/changed/,
+						/disappeared/,
 					);
 				} finally {
 					await snapshot.dispose();
+				}
+			},
+		);
+		await t.test(
+			"stable targets survive unrelated changes but reject changed destinations",
+			async () => {
+				await page.setContent('<a href="#one">Buy</a><p id="ticker">1</p>');
+				const snapshot = await observe(page);
+				try {
+					await page.locator("#ticker").evaluate((e) => (e.textContent = "2"));
+					await snapshot.execute(
+						"CLICK",
+						snapshot.data.targets[0],
+						undefined,
+						new AbortController().signal,
+					);
+					assert.ok(page.url().endsWith("#one"));
+				} finally {
+					await snapshot.dispose();
+				}
+				const changed = await observe(page);
+				try {
+					await page
+						.locator("a")
+						.evaluate((e) => e.setAttribute("href", "#different"));
+					await assert.rejects(
+						changed.execute(
+							"CLICK",
+							changed.data.targets[0],
+							undefined,
+							new AbortController().signal,
+						),
+						/changed/,
+					);
+				} finally {
+					await changed.dispose();
 				}
 			},
 		);

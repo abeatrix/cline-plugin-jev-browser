@@ -20,6 +20,7 @@ export interface RunStep {
 	providerConfidence?: unknown;
 	status: "attempted" | "executed" | "decision" | "stale";
 	latencyMs: number;
+	reason?: string;
 }
 export type RunStatus =
 	| "done_unverified"
@@ -27,6 +28,7 @@ export type RunStatus =
 	| "needs_review"
 	| "uncertain"
 	| "step_limit"
+	| "evaluation_limit"
 	| "interrupted";
 
 export interface ActionHistory {
@@ -121,7 +123,8 @@ export async function runJev(
 					status: "decision",
 					latencyMs: Math.round(performance.now() - decisionStarted),
 				});
-				await snapshot.assertFresh();
+				if (!["CLICK", "SELECT"].includes(decision.operation))
+					await snapshot.assertFresh();
 				if (page !== options.page())
 					throw new StaleObservationError("Active tab changed.");
 				if (decision.operation === "REVIEW")
@@ -233,6 +236,11 @@ export async function runJev(
 					step,
 					operation: "REOBSERVE",
 					status: "stale",
+					reason: /covered/.test(error.message)
+						? "target_unavailable"
+						: /disappeared/.test(error.message)
+							? "target_disappeared"
+							: "observation_changed",
 					latencyMs: 0,
 				});
 			} finally {
@@ -240,8 +248,10 @@ export async function runJev(
 			}
 		}
 		return finish(
-			"step_limit",
-			"Step budget reached. Inspect current progress before continuing.",
+			executed >= maxSteps ? "step_limit" : "evaluation_limit",
+			executed >= maxSteps
+				? "Action budget reached. Inspect current progress before continuing."
+				: "Evaluation budget reached because decisions could not be executed. Inspect stale reasons in the trace.",
 		);
 	} catch (error) {
 		failure = {

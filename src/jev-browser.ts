@@ -96,6 +96,13 @@ async function observeDocument(page: Page) {
 				if (targets.length >= 200) break;
 				if (
 					!visible(e) ||
+					!e.contains(
+						document.elementFromPoint(
+							e.getBoundingClientRect().x + e.getBoundingClientRect().width / 2,
+							e.getBoundingClientRect().y +
+								e.getBoundingClientRect().height / 2,
+						),
+					) ||
 					e.matches(":disabled") ||
 					e.closest('[aria-disabled="true"]')
 				)
@@ -238,7 +245,19 @@ async function observeDocument(page: Page) {
 					e.getAttribute("aria-readonly"),
 				]),
 			]);
-			return { nodes, data, signature };
+			const formState = JSON.stringify(
+				Array.from(
+					document.querySelectorAll(
+						'input,textarea,select,[contenteditable="true"]',
+					),
+				).map((e) => [
+					(e as HTMLInputElement).value,
+					(e as HTMLInputElement).checked,
+					e.getAttribute("aria-checked"),
+				]),
+			);
+			const links = nodes.map((e) => e.getAttribute("href"));
+			return { nodes, data, signature, formState, links };
 		};
 		const original = read();
 		return { original, read };
@@ -271,12 +290,14 @@ async function observeDocument(page: Page) {
 				const nodeHandle = await handle
 					.evaluateHandle((h, target) => {
 						const current = h.read();
-						if (
-							current.signature !== h.original.signature ||
-							current.nodes.length !== h.original.nodes.length ||
-							current.nodes.some((e, i) => e !== h.original.nodes[i])
-						)
-							throw new Error("Page changed; observe again before acting.");
+						if (target === undefined || target.operation === "TYPE_TEXT") {
+							if (
+								current.signature !== h.original.signature ||
+								current.nodes.length !== h.original.nodes.length ||
+								current.nodes.some((e, i) => e !== h.original.nodes[i])
+							)
+								throw new Error("Page changed; observe again before acting.");
+						}
 						if (target === undefined) return null;
 						const index = h.original.data.targets.findIndex(
 							(t) => t.id === target.id && t.operation === target.operation,
@@ -284,6 +305,24 @@ async function observeDocument(page: Page) {
 						const node = h.original.nodes[index];
 						if (!node?.isConnected)
 							throw new Error("Observed target disappeared.");
+						const currentIndex = current.nodes.findIndex(
+							(e, i) =>
+								e === node &&
+								current.data.targets[i]?.operation === target.operation &&
+								current.data.targets[i]?.option === target.option,
+						);
+						if (currentIndex < 0)
+							throw new Error("Observed target is covered or unavailable.");
+						const before = h.original.data.targets[index];
+						const after = current.data.targets[currentIndex];
+						if (
+							current.data.url !== h.original.data.url ||
+							current.formState !== h.original.formState ||
+							current.links[currentIndex] !== h.original.links[index] ||
+							JSON.stringify({ ...before, id: null }) !==
+								JSON.stringify({ ...after, id: null })
+						)
+							throw new Error("Page changed; target or form state changed.");
 						const r = node.getBoundingClientRect();
 						if (
 							!node.contains(
