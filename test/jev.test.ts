@@ -22,20 +22,41 @@ const observation: Observation = {
 	],
 };
 
-test("questions offer operation-specific observed targets in the same request", () => {
+test("one question compares concrete actions against scrolling and terminal choices", () => {
 	const q = buildQuestions(observation, "Find cats");
-	assert.equal(q.operation.type, "choice");
-	if (
-		q.operation.type !== "choice" ||
-		q.click_target.type !== "choice" ||
-		q.type_text_target.type !== "choice"
-	)
-		throw new Error();
-	assert.deepEqual(Object.keys(q.click_target.criteria), ["2"]);
-	assert.deepEqual(Object.keys(q.type_text_target.criteria), ["1"]);
-	assert.equal(q.select_target, undefined);
-	assert.equal("SCROLL_UP" in q.operation.criteria, false);
-	assert.equal("SCROLL_DOWN" in q.operation.criteria, true);
+	assert.equal(q.action.type, "choice");
+	assert.deepEqual(Object.keys(q.action.criteria), [
+		"WAIT",
+		"BLOCKED",
+		"REVIEW",
+		"DONE",
+		"TYPE_TEXT:1",
+		"CLICK:2",
+		"SCROLL_DOWN",
+	]);
+	const checked = buildQuestions(
+		{
+			...observation,
+			targets: [
+				{
+					id: "3",
+					operation: "CLICK",
+					label: "Small",
+					value: "small",
+					role: "radio",
+					checked: "true",
+				},
+			],
+		},
+		"Choose small",
+	);
+	assert.ok(!Object.hasOwn(checked.action.criteria, "CLICK:3"));
+	assert.ok(
+		!Object.hasOwn(
+			buildQuestions({ ...observation, text: "" }, "Finish").action.criteria,
+			"DONE",
+		),
+	);
 });
 
 test("text helper rejects missing, invented-shape, empty, or excessive outputs", () => {
@@ -52,7 +73,7 @@ test("text helper rejects missing, invented-shape, empty, or excessive outputs",
 	}
 });
 
-test("real AI SDK Gateway adapter makes one evaluation request and uses only the selected target head", async () => {
+test("real AI SDK Gateway adapter evaluates concrete actions in one request", async () => {
 	const originalFetch = globalThis.fetch;
 	const originalKey = process.env.AI_GATEWAY_API_KEY;
 	process.env.AI_GATEWAY_API_KEY = "offline-test-key";
@@ -64,27 +85,17 @@ test("real AI SDK Gateway adapter makes one evaluation request and uses only the
 		assert.equal(headers.get("authorization"), "Bearer offline-test-key");
 		assert.equal(headers.get("ai-model-id"), "typesafe-ai/jev");
 		const request = JSON.parse(String(init?.body));
-		assert.deepEqual(Object.keys(request.questions).sort(), [
-			"click_target",
-			"operation",
-			"type_text_target",
-		]);
-		const operations = Object.keys(request.questions.operation.criteria);
+		assert.deepEqual(Object.keys(request.questions), ["action"]);
+		const choices = Object.keys(request.questions.action.criteria);
 		return Response.json({
 			answers: {
-				operation: {
+				action: {
 					type: "choice",
-					choice: "CLICK",
+					choice: "CLICK:2",
 					probabilities: Object.fromEntries(
-						operations.map((op) => [op, op === "CLICK" ? 1 : 0]),
+						choices.map((c) => [c, c === "CLICK:2" ? 1 : 0]),
 					),
 				},
-				click_target: {
-					type: "choice",
-					choice: "2",
-					probabilities: { "2": 1 },
-				},
-				type_text_target: { type: "choice", choice: "1" },
 			},
 		});
 	};
@@ -370,6 +381,103 @@ test("browser loop and stale-target guards (offline)", async (t) => {
 					);
 				} finally {
 					await changed.dispose();
+				}
+			},
+		);
+		await t.test(
+			"visible labels expose hidden radio options and their selected state",
+			async () => {
+				await page.setContent(
+					'<input style="display:none" id="size" type="radio" name="size" value="small"><label for="size">Small $10</label><input style="display:none" id="disabled" type="radio" disabled><label for="disabled">Unavailable</label>',
+				);
+				const snapshot = await observe(page);
+				try {
+					const target = snapshot.data.targets.find(
+						(t) => t.label === "Small $10",
+					);
+					assert.ok(target);
+					assert.equal(target.role, "radio");
+					assert.equal(target.checked, "false");
+					assert.ok(
+						!snapshot.data.targets.some((t) => t.label === "Unavailable"),
+					);
+					await snapshot.execute(
+						"CLICK",
+						target,
+						undefined,
+						new AbortController().signal,
+					);
+					assert.equal(await page.locator("#size").isChecked(), true);
+				} finally {
+					await snapshot.dispose();
+				}
+				const updated = await observe(page);
+				try {
+					assert.equal(
+						updated.data.targets.find((t) => t.label === "Small $10")?.checked,
+						"true",
+					);
+				} finally {
+					await updated.dispose();
+				}
+			},
+		);
+		await t.test(
+			"labels covered by their own input click the associated input",
+			async () => {
+				await page.setContent(
+					'<div style="position:relative;width:180px;height:60px"><input id="option" type="radio" style="position:absolute;inset:0;width:100%;height:100%;opacity:0.01;z-index:2"><label for="option" style="display:block;width:100%;height:100%">No extras</label></div>',
+				);
+				const snapshot = await observe(page);
+				try {
+					const target = snapshot.data.targets.find(
+						(t) => t.label === "No extras" && t.role === "radio",
+					);
+					assert.ok(target);
+					await snapshot.execute(
+						"CLICK",
+						target,
+						undefined,
+						new AbortController().signal,
+					);
+					assert.ok(await page.locator("#option").isChecked());
+				} finally {
+					await snapshot.dispose();
+				}
+			},
+		);
+		await t.test(
+			"offscreen choices guide scrolling while preserving selected options",
+			async () => {
+				await page.setContent(
+					'<input id="chosen" type="radio" name="size" value="small" checked><label for="chosen">Small</label><div style="height:2000px"></div><input id="later" type="radio" name="carrier" value="later"><label for="later">Connect later</label><button disabled>Unavailable</button>',
+				);
+				const snapshot = await observe(page);
+				try {
+					assert.ok(
+						snapshot.data.offscreenControls?.below.includes("Connect later"),
+					);
+					assert.ok(
+						!snapshot.data.targets.some((t) => t.label === "Connect later"),
+					);
+					assert.ok(
+						!snapshot.data.offscreenControls?.below.includes("Unavailable"),
+					);
+					assert.deepEqual(snapshot.data.selectedOptions, [
+						{ group: "size", label: "Small", value: "small" },
+					]);
+				} finally {
+					await snapshot.dispose();
+				}
+				await page.locator("#later").scrollIntoViewIfNeeded();
+				const scrolled = await observe(page);
+				try {
+					assert.equal(scrolled.data.selectedOptions?.[0].value, "small");
+					assert.ok(
+						scrolled.data.targets.some((t) => t.label === "Connect later"),
+					);
+				} finally {
+					await scrolled.dispose();
 				}
 			},
 		);

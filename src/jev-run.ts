@@ -205,9 +205,18 @@ export async function runJev(
 				entry.status = "executed";
 				await options.onStep?.({ ...entry });
 				// Let event handlers render before the next read, without screenshot or network-idle waits.
-				await delay(decision.operation === "TYPE_TEXT" ? 150 : 50, undefined, {
-					signal,
-				});
+				await delay(
+					decision.target?.role === "radio" || decision.operation === "SELECT"
+						? 600
+						: decision.operation === "TYPE_TEXT" ||
+								decision.operation.startsWith("SCROLL")
+							? 150
+							: 350,
+					undefined,
+					{
+						signal,
+					},
+				);
 				stage = "post_action_observation";
 				const after = await observe(options.page(), signal);
 				try {

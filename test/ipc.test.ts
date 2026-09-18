@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,6 +15,12 @@ test("JSON IPC context supports wait batches and plugin-local cancellation", asy
 	process.env.CLINE_JEV_BROWSER_CONFIG = config;
 	const { JevBrowserManager } = await import("../src/runtime.ts");
 	const manager = new JevBrowserManager();
+	const server = createServer((_req, res) => res.end("<h1>Ready</h1>"));
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("No test server address");
+	const url = `http://127.0.0.1:${address.port}`;
 	const context = JSON.parse(
 		JSON.stringify({
 			sessionId: "ipc-test",
@@ -31,7 +38,7 @@ test("JSON IPC context supports wait batches and plugin-local cancellation", asy
 				answers: Object.fromEntries(
 					Object.entries(questions).map(([id, q]) => {
 						const keys = Object.keys((q as { criteria: object }).criteria);
-						const choice = id === "operation" ? "DONE" : keys[0];
+						const choice = id === "action" ? "DONE" : keys[0];
 						return [
 							id,
 							{
@@ -48,7 +55,7 @@ test("JSON IPC context supports wait batches and plugin-local cancellation", asy
 		};
 		try {
 			const run = await manager.run(
-				{ goal: "Observe this blank page" },
+				{ goal: "Observe the Ready heading", url },
 				context,
 			);
 			assert.equal(run.status, "done_unverified");
@@ -58,7 +65,7 @@ test("JSON IPC context supports wait batches and plugin-local cancellation", asy
 			);
 			assert.ok(run.result?.some((block) => block.type === "image"));
 			const second = await manager.run(
-				{ goal: "Observe this blank page" },
+				{ goal: "Observe the Ready heading" },
 				context,
 			);
 			assert.equal(
@@ -87,6 +94,9 @@ test("JSON IPC context supports wait batches and plugin-local cancellation", asy
 		await cancelled;
 	} finally {
 		await manager.stop(context);
+		await new Promise<void>((resolve, reject) =>
+			server.close((error) => (error ? reject(error) : resolve())),
+		);
 		rmSync(directory, { recursive: true, force: true });
 	}
 });

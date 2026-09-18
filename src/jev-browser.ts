@@ -12,12 +12,15 @@ export interface ObservedTarget {
 	checked?: string;
 	selected?: string;
 	expanded?: string;
+	href?: string;
 }
 export interface Observation {
 	url: string;
 	title: string;
 	text: string;
 	targets: ObservedTarget[];
+	offscreenControls?: { above: string[]; below: string[] };
+	selectedOptions?: Array<{ group: string; label: string; value: string }>;
 	scrollUp: boolean;
 	scrollDown: boolean;
 }
@@ -73,7 +76,7 @@ export async function observe(page: Page, signal?: AbortSignal) {
 async function observeDocument(page: Page) {
 	const handle = await page.evaluateHandle(() => {
 		const selector =
-			'a[href],button,input,textarea,select,summary,[contenteditable="true"],[role="button"],[role="link"],[role="option"],[role="tab"],[role="checkbox"],[role="radio"],[role="switch"],[role="menuitem"],[role="combobox"],[role="gridcell"],[role="menuitemradio"],[role="textbox"],[role="searchbox"],[role="spinbutton"]';
+			'label[for],a[href],button,input,textarea,select,summary,[contenteditable="true"],[role="button"],[role="link"],[role="option"],[role="tab"],[role="checkbox"],[role="radio"],[role="switch"],[role="menuitem"],[role="combobox"],[role="gridcell"],[role="menuitemradio"],[role="textbox"],[role="searchbox"],[role="spinbutton"]';
 		const visible = (e: HTMLElement) => {
 			const r = e.getBoundingClientRect();
 			return (
@@ -87,22 +90,65 @@ async function observeDocument(page: Page) {
 				r.left + r.width / 2 < innerWidth
 			);
 		};
+		const receivesPointer = (e: HTMLElement) => {
+			const r = e.getBoundingClientRect();
+			const hit = document.elementFromPoint(
+				r.x + r.width / 2,
+				r.y + r.height / 2,
+			);
+			return (
+				e.contains(hit) ||
+				(e instanceof HTMLLabelElement && !!e.control?.contains(hit))
+			);
+		};
+
 		const read = () => {
 			if (!document.body || document.readyState === "loading")
 				throw new Error("JEV_DOCUMENT_NOT_READY");
 			const nodes: HTMLElement[] = [];
 			const targets: ObservedTarget[] = [];
+			const offscreenControls = {
+				above: [] as string[],
+				below: [] as string[],
+			};
 			for (const e of document.querySelectorAll<HTMLElement>(selector)) {
 				if (targets.length >= 200) break;
+				const rect = e.getBoundingClientRect();
+				const associated = e instanceof HTMLLabelElement ? e.control : e;
+				if (
+					associated &&
+					associated.matches(
+						"input,select,textarea,[role=radio],[role=checkbox],[role=combobox]",
+					) &&
+					!associated.matches(":disabled,:checked") &&
+					!e.closest('[inert],[aria-hidden="true"],[aria-disabled="true"]') &&
+					e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+					rect.width > 0 &&
+					rect.height > 0
+				) {
+					const direction =
+						rect.bottom <= 0
+							? "above"
+							: rect.top >= innerHeight
+								? "below"
+								: undefined;
+					if (direction && offscreenControls[direction].length < 50) {
+						const name = (
+							e.getAttribute("aria-label") ||
+							e.innerText ||
+							e.getAttribute("title") ||
+							""
+						)
+							.trim()
+							.slice(0, 300);
+						if (name && !offscreenControls[direction].includes(name))
+							offscreenControls[direction].push(name);
+					}
+				}
+
 				if (
 					!visible(e) ||
-					!e.contains(
-						document.elementFromPoint(
-							e.getBoundingClientRect().x + e.getBoundingClientRect().width / 2,
-							e.getBoundingClientRect().y +
-								e.getBoundingClientRect().height / 2,
-						),
-					) ||
+					!receivesPointer(e) ||
 					e.matches(":disabled") ||
 					e.closest('[aria-disabled="true"]')
 				)
@@ -112,7 +158,9 @@ async function observeDocument(page: Page) {
 					e.querySelector("button,[role=button]")
 				)
 					continue;
-				const input = e as HTMLInputElement;
+				const control = e instanceof HTMLLabelElement ? e.control : e;
+				if (!control || control.matches(":disabled")) continue;
+				const input = control as HTMLInputElement;
 				if (["password", "file", "hidden"].includes(input.type)) continue;
 				const label = (
 					e.getAttribute("aria-label") ||
@@ -151,7 +199,12 @@ async function observeDocument(page: Page) {
 						operation,
 						label: optionLabel ? `${label} → ${optionLabel}` : label,
 						value: value.slice(0, 1000),
-						role: e.getAttribute("role") || e.tagName.toLowerCase(),
+						role:
+							control.getAttribute("role") ||
+							(["radio", "checkbox"].includes(input.type)
+								? input.type
+								: e.tagName.toLowerCase()),
+						href: e instanceof HTMLAnchorElement ? e.href : undefined,
 						checked:
 							e.getAttribute("aria-checked") ??
 							(["checkbox", "radio"].includes(input.type)
@@ -221,6 +274,22 @@ async function observeDocument(page: Page) {
 				}
 			}
 			const data: Observation = {
+				offscreenControls,
+				selectedOptions: Array.from(
+					document.querySelectorAll<HTMLInputElement>(
+						"input[type=radio]:checked,input[type=checkbox]:checked",
+					),
+				)
+					.filter((e) => !e.closest('[aria-hidden="true"],[inert]'))
+					.slice(0, 50)
+					.map((e) => ({
+						group: e.name,
+						label: Array.from(e.labels ?? [])
+							.map((l) => l.textContent?.trim() ?? "")
+							.join(" ")
+							.slice(0, 300),
+						value: e.value,
+					})),
 				url: location.href,
 				title: document.title,
 				text: words.join("\n").slice(0, 6000),
@@ -324,17 +393,19 @@ async function observeDocument(page: Page) {
 						)
 							throw new Error("Page changed; target or form state changed.");
 						const r = node.getBoundingClientRect();
+						const hit = document.elementFromPoint(
+							r.x + r.width / 2,
+							r.y + r.height / 2,
+						);
 						if (
-							!node.contains(
-								document.elementFromPoint(
-									r.x + r.width / 2,
-									r.y + r.height / 2,
-								),
-							)
-						) {
+							!node.contains(hit) &&
+							!(node instanceof HTMLLabelElement && node.control?.contains(hit))
+						)
 							throw new Error("Observed target is covered.");
-						}
-						return node;
+						return node instanceof HTMLLabelElement &&
+							node.control?.contains(hit)
+							? node.control
+							: node;
 					}, target)
 					.catch((error) => {
 						if (
@@ -350,7 +421,8 @@ async function observeDocument(page: Page) {
 					const element = nodeHandle.asElement();
 					// A failed mutation is never retried by this loop.
 					if (operation === "CLICK" && element)
-						await element.click({ timeout: 2000 });
+						// Wait for click-triggered navigation before evaluating another action.
+						await element.click({ timeout: 10000 });
 					else if (operation === "TYPE_TEXT" && element && text !== undefined)
 						await element.fill(text, { timeout: 2000 });
 					else if (
@@ -360,7 +432,14 @@ async function observeDocument(page: Page) {
 					)
 						await element.selectOption(target.option, { timeout: 2000 });
 					else if (operation === "SCROLL_DOWN" || operation === "SCROLL_UP")
-						await page.mouse.wheel(0, operation === "SCROLL_DOWN" ? 560 : -560);
+						await page.evaluate(
+							(direction) =>
+								window.scrollBy({
+									top: direction * innerHeight * 0.5,
+									behavior: "instant",
+								}),
+							operation === "SCROLL_DOWN" ? 1 : -1,
+						);
 					else if (operation === "WAIT")
 						await new Promise((resolve) => setTimeout(resolve, 150));
 					else throw new Error("Unsupported observed action.");

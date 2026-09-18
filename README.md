@@ -7,9 +7,11 @@ AI Gateway, with automatic before/after screenshots and optional manual actions.
 ## Jev browser loop
 
 `jev_run` uses AI SDK 7's `experimental_evaluate` with
-`typesafe-ai/jev`. One evaluation chooses the operation and operation-specific
-targets in parallel; only the selected operation's target is executed. Jev sees
-structured visible DOM observations with indexed action targets, not screenshots.
+`typesafe-ai/jev`. One evaluation chooses a concrete operation and target together, comparing
+each available action directly against scrolling, waiting, and stopping. Jev sees
+structured DOM observations with indexed visible action targets, selected form
+options (including offscreen selections), and summaries of controls above and
+below the viewport. It does not receive screenshots.
 See [Vercel's evaluation documentation](https://vercel.com/docs/ai-gateway/modalities/evaluation).
 
 Provide `AI_GATEWAY_API_KEY` in the **plugin process environment** before starting
@@ -39,7 +41,7 @@ when creating a browser. The browser remains available for follow-up runs until 
 Supported automatic operations: click, replace text, native dropdown selection,
 page scroll, and short loading waits. Runs default to 20 steps (maximum 60) and
 have a 100-second cancellation deadline. There is no default probability cutoff. Optional `minProbability` gates selected
-operation/target probabilities; these are distinct from provider confidence. A browser operation already in flight can take up to its bounded
+action probabilities; these are distinct from provider confidence. A browser operation already in flight can take up to its bounded
 Playwright timeout to settle after cancellation. Browser mutations are not retried.
 
 Results include `status`, `steps`, `elapsedMs`, and a JSONL `tracePath`.
@@ -61,7 +63,8 @@ The loop retains observed DOM nodes and checks page semantics, node identity, an
 occlusion before acting. Frames, shadow DOM, canvas controls, nested scrolling,
 uploads, and arbitrary keyboard widgets are outside this initial DOM loop; use
 the manual tools where appropriate. Model context is capped at 200 action targets
-and 6,000 visible text characters. This can omit controls on dense pages.
+and 6,000 visible text characters, plus 50 selected options and up to 50
+offscreen control labels in each direction. This can omit controls on dense pages.
 
 Page text, visible field values, and the task goal are sent to Gateway. Password
 and file fields are excluded, but other sensitive content is not automatically
