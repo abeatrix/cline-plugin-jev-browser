@@ -104,11 +104,19 @@ added later without changing how Cline calls the tools.
 ## Install
 
 ```bash
+cline plugin install jev-browser
+```
+
+The short install keyword becomes available after [cline/plugins PR #230](https://github.com/cline/plugins/pull/230)
+is merged. Until then,
+install directly from the source repository:
+
+```bash
 cline plugin install https://github.com/abeatrix/cline-plugin-jev-browser.git
 ```
 
-The repository must contain the plugin package at its root. For a local checkout,
-use `cline plugin install /path/to/cline-plugin-jev-browser` instead.
+For local development, run `cline plugin install /path/to/cline-plugin-jev-browser`.
+In a checkout of `cline/plugins`, run `cline plugin install ./plugins/jev-browser`.
 
 Chromium setup begins automatically when the plugin loads. It uses the installed
 plugin's Playwright CLI to download matching browser builds, skipping artifacts
