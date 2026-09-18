@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { Page } from "playwright";
 
 export type TargetOperation = "CLICK" | "TYPE_TEXT" | "SELECT";
@@ -25,7 +26,51 @@ export class StaleObservationError extends Error {}
 
 // The closure retains actual nodes, outside page globals. Model output can only
 // select an offered ID; it never becomes a selector or executable browser code.
-export async function observe(page: Page) {
+export function isNavigationReadError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		/Execution context was destroyed|Cannot find context with specified id|JSHandle is disposed|Unable to adopt element handle from a different document/.test(
+			error.message,
+		)
+	);
+}
+
+// Wait for a usable document, not network-idle (many sites keep requests open).
+export async function waitForDocument(page: Page, signal?: AbortSignal) {
+	signal?.throwIfAborted();
+	const ready = await page.waitForFunction(
+		() => document.readyState !== "loading" && document.body !== null,
+		undefined,
+		{ timeout: 5000 },
+	);
+	await ready.dispose();
+	signal?.throwIfAborted();
+}
+
+// Retry only reads invalidated by document replacement, never a browser action.
+export async function observe(page: Page, signal?: AbortSignal) {
+	for (let attempt = 0; ; attempt++) {
+		signal?.throwIfAborted();
+		try {
+			await waitForDocument(page, signal);
+			return await observeDocument(page);
+		} catch (error) {
+			if (
+				page.isClosed() ||
+				(!isNavigationReadError(error) &&
+					!(
+						error instanceof Error &&
+						error.message.includes("JEV_DOCUMENT_NOT_READY")
+					)) ||
+				attempt >= 4
+			)
+				throw error;
+			await delay(100, undefined, { signal });
+		}
+	}
+}
+
+async function observeDocument(page: Page) {
 	const handle = await page.evaluateHandle(() => {
 		const selector =
 			'a[href],button,input,textarea,select,summary,[contenteditable="true"],[role="button"],[role="link"],[role="option"],[role="tab"],[role="checkbox"],[role="radio"],[role="switch"],[role="menuitem"],[role="combobox"],[role="gridcell"],[role="menuitemradio"],[role="textbox"],[role="searchbox"],[role="spinbutton"]';
@@ -43,6 +88,8 @@ export async function observe(page: Page) {
 			);
 		};
 		const read = () => {
+			if (!document.body || document.readyState === "loading")
+				throw new Error("JEV_DOCUMENT_NOT_READY");
 			const nodes: HTMLElement[] = [];
 			const targets: ObservedTarget[] = [];
 			for (const e of document.querySelectorAll<HTMLElement>(selector)) {
@@ -285,7 +332,7 @@ export async function observe(page: Page) {
 			dispose: () => handle.dispose(),
 		};
 	} catch (error) {
-		await handle.dispose();
+		await handle.dispose().catch(() => undefined);
 		throw error;
 	}
 }

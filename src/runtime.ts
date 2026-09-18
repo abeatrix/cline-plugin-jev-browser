@@ -1,3 +1,4 @@
+import { waitForDocument } from "./jev-browser.ts";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -162,7 +163,12 @@ export class JevBrowserManager {
 			"screenshots",
 			`${Date.now()}-${label}.png`,
 		);
-		const image = await session.page.screenshot({ path, type: "png" });
+		await waitForDocument(session.page);
+		const image = await session.page.screenshot({
+			path,
+			type: "png",
+			timeout: 5000,
+		});
 		const state = await this.stateForSession(session, config);
 		emitHostUpdate("screenshot", { state, path });
 		return screenshotResult(state, path, image);

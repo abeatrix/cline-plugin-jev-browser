@@ -101,11 +101,11 @@ added later without changing how Cline calls the tools.
 ## Install
 
 ```bash
-cline plugin install https://github.com/abeatrix/cline-plugin-jev-computer.git
+cline plugin install https://github.com/abeatrix/cline-plugin-jev-browser.git
 ```
 
 The repository must contain the plugin package at its root. For a local checkout,
-use `cline plugin install /path/to/cline-plugin-jev-computer` instead.
+use `cline plugin install /path/to/cline-plugin-jev-browser` instead.
 
 Chromium setup begins automatically when the plugin loads. It uses the installed
 plugin's Playwright CLI to download matching browser builds, skipping artifacts
@@ -126,40 +126,33 @@ cline config tools
 
 ### Example test prompts
 
-After configuring your Gateway key and enabling the plugin, paste one of these
-prompts into Cline. `jev_run` handles startup and before/after screenshots.
+After configuring your Gateway key and enabling the plugin, provide the URL and
+goal in plain language. The plugin's tool descriptions and rules instruct the
+agent to run the goal once, verify the returned screenshot, report the outcome,
+timing and trace, and close the browser. Retries and manual fallback require an
+explicit user request; you do not need to repeat those instructions in each prompt.
+These are agent instructions, not a guarantee that every host/model follows them.
 
 **Find and open a reference article**
 
 ```text
-Use the Jev Browser plugin. Call jev_run with url https://en.wikipedia.org
-and this goal: Search for the James Webb Space Telescope and open its
-article. Stop when the article title and introductory text are visible.
-
-Do not use jev_actions or manual fallback. If the run fails, report
-what happened without retrying. Verify the returned final screenshot;
-if the image is not displayed, read finalScreenshot.artifactPath.
-Report the verified outcome, elapsedMs, executed step count, and tracePath.
-Then call jev_stop.
+Use the Jev Browser plugin with url https://en.wikipedia.org and goal:
+Search for the James Webb Space Telescope and open its article.
+Stop when the article title and introductory text are visible.
 ```
 
 **Browse a demonstration bookstore**
 
 ```text
-Use the Jev Browser plugin. Call jev_run with url https://books.toscrape.com
-and this goal: Open the Travel category, then open the first book listed.
-Stop when the book's title, price, and availability are visible. Do not
-purchase anything or submit personal information.
-
-Do not use jev_actions or manual fallback. If the run fails, report
-what happened without retrying. Verify the returned final screenshot;
-if the image is not displayed, read finalScreenshot.artifactPath.
-Report the book details only if visible, plus elapsedMs, executed step
-count, and tracePath. Then call jev_stop.
+Use the Jev Browser tool with url https://books.toscrape.com and goal:
+Open the Travel category, then open the first book listed.
+Stop when the book's title, price, and availability are visible.
+Do not purchase anything or submit personal information.
 ```
 
-A `done_unverified` status is a model claim, not proof of success. The main
-agent should verify the screenshot before reporting completion.
+A `done_unverified` status is a model claim, not proof of success. The main agent
+checks the final screenshot and reports the observed outcome separately from the
+run status. If you want retries, manual fallback, or the browser left open, say so.
 
 ## Optional configuration
 

@@ -1,6 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Page } from "playwright";
-import { observe, StaleObservationError } from "./jev-browser.ts";
+import {
+	isNavigationReadError,
+	observe,
+	StaleObservationError,
+} from "./jev-browser.ts";
 import { createJevPolicy, type JevPolicy } from "./jev-model.ts";
 
 export interface RunInput {
@@ -79,7 +83,9 @@ export async function runJev(
 	let stage = "observation";
 	const textCache = new Map<string, string>();
 	const started = performance.now();
+	let failure: { stage: string; category: string } | undefined;
 	const finish = (status: RunStatus, message: string) => ({
+		failure,
 		status,
 		message,
 		steps,
@@ -95,7 +101,7 @@ export async function runJev(
 			stage = "observation";
 			signal.throwIfAborted();
 			const page = options.page();
-			const snapshot = await observe(page);
+			const snapshot = await observe(page, signal);
 			try {
 				const decisionStarted = performance.now();
 				stage = "evaluation";
@@ -200,7 +206,7 @@ export async function runJev(
 					signal,
 				});
 				stage = "post_action_observation";
-				const after = await observe(options.page());
+				const after = await observe(options.page(), signal);
 				try {
 					memory.actions.push({
 						action: decision.target?.label ?? decision.operation,
@@ -219,7 +225,7 @@ export async function runJev(
 							"Three actions produced no observable progress.",
 						);
 				} finally {
-					await after.dispose();
+					await after.dispose().catch(() => undefined);
 				}
 			} catch (error) {
 				if (!(error instanceof StaleObservationError)) throw error;
@@ -237,14 +243,27 @@ export async function runJev(
 			"step_limit",
 			"Step budget reached. Inspect current progress before continuing.",
 		);
-	} catch {
+	} catch (error) {
+		failure = {
+			stage,
+			category: signal.aborted
+				? "cancelled"
+				: isNavigationReadError(error)
+					? "navigation_context"
+					: error instanceof Error && error.name === "TimeoutError"
+						? "timeout"
+						: error instanceof Error &&
+								/createTreeWalker|JEV_DOCUMENT_NOT_READY/.test(error.message)
+							? "document_not_ready"
+							: "unexpected_error",
+		};
 		// Provider errors may contain request bodies. Keep keys, prompts, and field
 		// values out of tool errors. An attempted action may have taken effect.
 		return finish(
 			"interrupted",
 			signal.aborted
 				? "Run cancelled or timed out. Inspect the page before any further actions."
-				: `Run failed during ${stage}. Inspect the page and trace; attempted actions may have taken effect and were not retried.`,
+				: `Run failed during ${stage}${isNavigationReadError(error) ? " (document changed during observation)" : ""}. Inspect the page and trace; attempted actions may have taken effect and were not retried.`,
 		);
 	}
 }
